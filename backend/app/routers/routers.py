@@ -221,7 +221,7 @@ catalog_router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 @catalog_router.get("/categories", response_model=list[CatalogCategoryOut])
 async def get_categories(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CatalogCategory).order_by(CatalogCategory.display_order))
+    result = await db.execute(select(CatalogCategory).order_by(CatalogCategory.sort_order))
     return result.scalars().all()
 
 
@@ -237,36 +237,47 @@ async def check_duplicate(name: str, db: AsyncSession = Depends(get_db)):
 
 @catalog_router.get("/items", response_model=CatalogSearchResult)
 async def search_catalog(
-    q: str = "",
+    q: str = Query(default="", max_length=100),
     category: Optional[str] = None,
-    limit: int = Query(20, le=50),
+    limit: int = Query(default=20, le=50),
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    cache_key = f"search:{q}:{category}:{limit}:{offset}"
-    cached = await get_search_cache(cache_key)
-    if cached:
-        return cached
+    if q:
+        cached = await get_search_cache(q)
+        if cached:
+            return CatalogSearchResult(items=cached, total=len(cached))
 
-    normalized_q = normalize_hebrew(q)
-    stmt = select(CatalogItem)
-    if normalized_q:
-        stmt = stmt.where(CatalogItem.name_he_normalized.ilike(f"%{normalized_q}%"))
+    q_norm = normalize_hebrew(q)
+
+    stmt = select(CatalogItem).where(CatalogItem.deleted_at.is_(None))
     if category:
         stmt = stmt.where(CatalogItem.category_id == category)
-    stmt = stmt.order_by(CatalogItem.usage_count.desc()).limit(limit).offset(offset)
+    if q_norm:
+        stmt = stmt.where(
+            text("similarity(name_he_normalized, :q) > 0.15").bindparams(q=q_norm)
+        ).order_by(text("similarity(name_he_normalized, :q) DESC").bindparams(q=q_norm))
+    else:
+        stmt = stmt.order_by(CatalogItem.usage_count.desc())
 
+    stmt = stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
     items = result.scalars().all()
 
-    count_stmt = select(func.count()).select_from(CatalogItem)
-    if normalized_q:
-        count_stmt = count_stmt.where(CatalogItem.name_he_normalized.ilike(f"%{normalized_q}%"))
+    if q:
+        await set_search_cache(q, [CatalogItemOut.model_validate(i).model_dump() for i in items])
+
+    count_stmt = select(func.count()).select_from(CatalogItem).where(CatalogItem.deleted_at.is_(None))
+    if q_norm:
+        count_stmt = count_stmt.where(
+            text("similarity(name_he_normalized, :q) > 0.15").bindparams(q=q_norm)
+        )
+    if category:
+        count_stmt = count_stmt.where(CatalogItem.category_id == category)
     total = (await db.execute(count_stmt)).scalar_one()
 
-    out = CatalogSearchResult(items=items, total=total)
-    await set_search_cache(cache_key, out)
-    return out
+    return CatalogSearchResult(items=items, total=total)
 
 
 @catalog_router.post("/items", response_model=CatalogItemOut, status_code=201)
@@ -563,16 +574,12 @@ async def invite_to_list(
     user: User = Depends(get_current_user),
 ):
     await require_list_role(list_id, user, db, min_role="admin")
-    result = await db.execute(select(User).where(User.email == body.email.lower()))
-    invitee = result.scalar_one_or_none()
-    if not invitee:
-        raise HTTPException(status_code=404, detail="משתמש לא נמצא")
     existing = await db.execute(
-        select(ListMember).where(ListMember.list_id == list_id, ListMember.user_id == invitee.id)
+        select(ListMember).where(ListMember.list_id == list_id, ListMember.user_id == body.user_id)
     )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="המשתמש כבר חבר ברשימה")
-    db.add(ListMember(list_id=list_id, user_id=invitee.id, role=body.role or "editor"))
+    db.add(ListMember(list_id=list_id, user_id=body.user_id, role=body.role or "editor"))
     return {"ok": True}
 
 
