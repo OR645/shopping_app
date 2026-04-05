@@ -90,6 +90,16 @@ class CatalogItemCreate(BaseModel):
     barcode: Optional[str] = None
 
 
+class CatalogItemUpdate(BaseModel):
+    """PATCH body for editing a catalog item."""
+    name_he: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    name_en: Optional[str] = None
+    category_id: Optional[str] = None
+    default_qty: Optional[Decimal] = Field(default=None, ge=0)
+    default_unit: Optional[str] = Field(default=None, max_length=30)
+    barcode: Optional[str] = Field(default=None, max_length=50)
+
+
 class CatalogItemOut(BaseModel):
     id: str
     name_he: str
@@ -162,9 +172,10 @@ class ListItemCreate(BaseModel):
 
 
 class ListItemUpdate(BaseModel):
-    quantity: Optional[Decimal] = None
-    unit: Optional[str] = None
-    note: Optional[str] = None
+    """PATCH body for updating a list item's quantity / unit / note."""
+    quantity: Optional[Decimal] = Field(default=None, ge=0)
+    unit: Optional[str] = Field(default=None, max_length=30)
+    note: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = Field(default=None, pattern="^(pending|purchased)$")
     vector_clock: Optional[dict[str, int]] = None
 
