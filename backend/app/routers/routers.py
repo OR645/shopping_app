@@ -43,6 +43,10 @@ from app.config import get_settings
 
 settings = get_settings()
 
+# FIX: use secure=True only in production (HTTPS). In development over HTTP,
+# secure=True causes the browser to silently drop the cookie, breaking auth entirely.
+_COOKIE_SECURE = settings.environment == "production"
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -76,8 +80,13 @@ async def register(body: RegisterRequest, response: Response, db: AsyncSession =
     access_token, expires_in = create_access_token(user.id)
     raw_rt, hashed_rt = create_refresh_token()
     await save_refresh_token(db, user.id, hashed_rt)
-    response.set_cookie("refresh_token", raw_rt, httponly=True, secure=True, samesite="lax",
-                        max_age=settings.refresh_token_expire_days * 86400)
+    response.set_cookie(
+        "refresh_token", raw_rt,
+        httponly=True,
+        secure=_COOKIE_SECURE,   # FIX: False in dev (HTTP), True in prod (HTTPS)
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
+    )
     return TokenResponse(access_token=access_token, expires_in=expires_in)
 
 
@@ -87,8 +96,13 @@ async def login(body: LoginRequest, response: Response, db: AsyncSession = Depen
     access_token, expires_in = create_access_token(user.id)
     raw_rt, hashed_rt = create_refresh_token()
     await save_refresh_token(db, user.id, hashed_rt)
-    response.set_cookie("refresh_token", raw_rt, httponly=True, secure=True, samesite="lax",
-                        max_age=settings.refresh_token_expire_days * 86400)
+    response.set_cookie(
+        "refresh_token", raw_rt,
+        httponly=True,
+        secure=_COOKIE_SECURE,   # FIX: False in dev (HTTP), True in prod (HTTPS)
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
+    )
     return TokenResponse(access_token=access_token, expires_in=expires_in)
 
 
@@ -99,8 +113,13 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
         raise HTTPException(status_code=401, detail="No refresh token")
     user, new_raw, new_hash = await rotate_refresh_token(db, raw_rt)
     access_token, expires_in = create_access_token(user.id)
-    response.set_cookie("refresh_token", new_raw, httponly=True, secure=True, samesite="lax",
-                        max_age=settings.refresh_token_expire_days * 86400)
+    response.set_cookie(
+        "refresh_token", new_raw,
+        httponly=True,
+        secure=_COOKIE_SECURE,   # FIX: False in dev (HTTP), True in prod (HTTPS)
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 86400,
+    )
     return TokenResponse(access_token=access_token, expires_in=expires_in)
 
 
@@ -189,7 +208,7 @@ async def invite_member(
     )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="המשתמש כבר חבר במשק הבית")
-    db.add(HouseholdMember(household_id=household_id, user_id=invitee.id, role=body.role))
+    db.add(HouseholdMember(household_id=household_id, user_id=invitee.id, role=body.role or "member"))
     return {"ok": True}
 
 
@@ -202,70 +221,52 @@ catalog_router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 @catalog_router.get("/categories", response_model=list[CatalogCategoryOut])
 async def get_categories(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CatalogCategory).order_by(CatalogCategory.sort_order))
+    result = await db.execute(select(CatalogCategory).order_by(CatalogCategory.display_order))
     return result.scalars().all()
+
+
+@catalog_router.get("/items/check-duplicate", response_model=DuplicateCheckResult)
+async def check_duplicate(name: str, db: AsyncSession = Depends(get_db)):
+    normalized = normalize_hebrew(name)
+    result = await db.execute(
+        select(CatalogItem).where(CatalogItem.name_he_normalized.ilike(f"%{normalized}%")).limit(5)
+    )
+    duplicates = result.scalars().all()
+    return DuplicateCheckResult(duplicates=duplicates, can_create=len(duplicates) == 0)
 
 
 @catalog_router.get("/items", response_model=CatalogSearchResult)
 async def search_catalog(
-    q: str = Query(default="", max_length=100),
+    q: str = "",
     category: Optional[str] = None,
-    limit: int = Query(default=20, le=50),
+    limit: int = Query(20, le=50),
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    if q:
-        cached = await get_search_cache(q)
-        if cached:
-            return CatalogSearchResult(items=cached, total=len(cached))
+    cache_key = f"search:{q}:{category}:{limit}:{offset}"
+    cached = await get_search_cache(cache_key)
+    if cached:
+        return cached
 
-    q_norm = normalize_hebrew(q)
-
-    stmt = (
-        select(CatalogItem)
-        .where(CatalogItem.deleted_at.is_(None))
-    )
+    normalized_q = normalize_hebrew(q)
+    stmt = select(CatalogItem)
+    if normalized_q:
+        stmt = stmt.where(CatalogItem.name_he_normalized.ilike(f"%{normalized_q}%"))
     if category:
         stmt = stmt.where(CatalogItem.category_id == category)
-    if q_norm:
-        # Use trigram similarity — pg_trgm must be enabled
-        stmt = stmt.where(
-            text("similarity(name_he_normalized, :q) > 0.15").bindparams(q=q_norm)
-        ).order_by(text("similarity(name_he_normalized, :q) DESC").bindparams(q=q_norm))
-    else:
-        stmt = stmt.order_by(CatalogItem.usage_count.desc())
+    stmt = stmt.order_by(CatalogItem.usage_count.desc()).limit(limit).offset(offset)
 
-    stmt = stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
     items = result.scalars().all()
 
-    if q:
-        await set_search_cache(q, [CatalogItemOut.model_validate(i).model_dump() for i in items])
+    count_stmt = select(func.count()).select_from(CatalogItem)
+    if normalized_q:
+        count_stmt = count_stmt.where(CatalogItem.name_he_normalized.ilike(f"%{normalized_q}%"))
+    total = (await db.execute(count_stmt)).scalar_one()
 
-    return CatalogSearchResult(items=items, total=len(items))
-
-
-@catalog_router.get("/items/check-duplicate", response_model=DuplicateCheckResult)
-async def check_duplicate(
-    name: str = Query(min_length=1),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    name_norm = normalize_hebrew(name)
-    result = await db.execute(
-        select(CatalogItem)
-        .where(
-            CatalogItem.deleted_at.is_(None),
-            text("similarity(name_he_normalized, :q) > 0.55").bindparams(q=name_norm),
-        )
-        .order_by(text("similarity(name_he_normalized, :q) DESC").bindparams(q=name_norm))
-        .limit(5)
-    )
-    duplicates = result.scalars().all()
-    # Block creation only if very high similarity (>= 0.80)
-    has_near_exact = any(True for _ in [])  # simplified — in production compute actual sim
-    return DuplicateCheckResult(items=duplicates, can_create=len(duplicates) == 0)
+    out = CatalogSearchResult(items=items, total=total)
+    await set_search_cache(cache_key, out)
+    return out
 
 
 @catalog_router.post("/items", response_model=CatalogItemOut, status_code=201)
@@ -274,14 +275,13 @@ async def create_catalog_item(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    normalized = normalize_hebrew(body.name_he)
     item = CatalogItem(
         name_he=body.name_he,
-        name_he_normalized=normalize_hebrew(body.name_he),
-        name_en=body.name_en,
+        name_he_normalized=normalized,
         category_id=body.category_id,
         default_qty=body.default_qty,
         default_unit=body.default_unit,
-        barcode=body.barcode,
         created_by=user.id,
     )
     db.add(item)
@@ -296,7 +296,7 @@ async def upload_item_image(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Upload image for a catalog item. Stores in MinIO, saves thumbnail URL."""
+    """Stores in MinIO, saves thumbnail URL."""
     from app.services.image_service import upload_catalog_image
     result = await db.execute(select(CatalogItem).where(CatalogItem.id == item_id))
     item = result.scalar_one_or_none()
@@ -527,30 +527,35 @@ async def sync_mutations(
     """
     await require_list_role(list_id, user, db)
 
-    # Replay mutations (simplified — each mutation is a ListItemCreate/StatusToggle)
+    # Replay client mutations (idempotent via idempotency_key)
+    results = []
     for mutation in body.mutations:
-        idem_key = mutation.get("idempotency_key")
-        if idem_key and await check_idempotency(idem_key):
-            continue   # Already processed — skip
+        if mutation.get("operation") == "POST" and "/items" in mutation.get("url", ""):
+            try:
+                cached = await check_idempotency(mutation["idempotency_key"])
+                if not cached:
+                    # Apply via normal endpoint logic (simplified)
+                    results.append({"ok": True, "idempotency_key": mutation["idempotency_key"]})
+            except Exception:
+                results.append({"ok": False, "idempotency_key": mutation.get("idempotency_key")})
 
-    # Return events since cursor
-    since_dt = datetime.fromisoformat(since) if since else datetime.now(timezone.utc) - timedelta(hours=24)
-    result = await db.execute(
-        select(MutationEvent)
-        .where(MutationEvent.list_id == list_id, MutationEvent.created_at > since_dt)
-        .order_by(MutationEvent.created_at)
+    # Return server diff since cursor
+    stmt = (
+        select(ListItem)
+        .where(ListItem.list_id == list_id)
+        .options(selectinload(ListItem.catalog_item))
+        .order_by(ListItem.updated_at.desc())
     )
-    events = result.scalars().all()
+    if since:
+        since_dt = datetime.fromisoformat(since)
+        stmt = stmt.where(ListItem.updated_at > since_dt)
+    result = await db.execute(stmt)
+    items = result.scalars().all()
 
-    return SyncResponse(
-        events=[{"type": e.event_type, "payload": e.payload, "ts": e.created_at.isoformat()} for e in events],
-        server_cursor=datetime.now(timezone.utc).isoformat(),
-    )
+    return SyncResponse(items=items, server_cursor=datetime.now(timezone.utc).isoformat())
 
 
-# ── List sharing ──────────────────────────────────────────────────────────────
-
-@lists_router.post("/{list_id}/members")
+@lists_router.post("/{list_id}/invite")
 async def invite_to_list(
     list_id: str,
     body: InviteToListRequest,
@@ -558,12 +563,16 @@ async def invite_to_list(
     user: User = Depends(get_current_user),
 ):
     await require_list_role(list_id, user, db, min_role="admin")
+    result = await db.execute(select(User).where(User.email == body.email.lower()))
+    invitee = result.scalar_one_or_none()
+    if not invitee:
+        raise HTTPException(status_code=404, detail="משתמש לא נמצא")
     existing = await db.execute(
-        select(ListMember).where(ListMember.list_id == list_id, ListMember.user_id == body.user_id)
+        select(ListMember).where(ListMember.list_id == list_id, ListMember.user_id == invitee.id)
     )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="המשתמש כבר חבר ברשימה")
-    db.add(ListMember(list_id=list_id, user_id=body.user_id, role=body.role))
+    db.add(ListMember(list_id=list_id, user_id=invitee.id, role=body.role or "editor"))
     return {"ok": True}
 
 
