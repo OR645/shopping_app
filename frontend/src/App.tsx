@@ -3,10 +3,11 @@ import { useStore, selectActiveItems, selectPendingItems } from './store'
 import {
   useHouseholds, useLists, useListItems, useCategories,
   useCatalogSearch, useAddItem, useToggleItem, useDeleteItem,
-  useCreateCatalogItem, useRecurring, useCreateRecurring,
+  useUpdateItem, useCreateCatalogItem, useUpdateCatalogItem, useDeleteCatalogItem,
+  useUploadCatalogImage, useRecurring, useCreateRecurring,
   useUpdateRecurring, useListWebSocket, useOfflineSync,
-  useCreateList,
 } from './hooks'
+import { api } from './api/client'
 import { LoginPage, RegisterPage } from './pages/Auth'
 import { HouseholdSetupPage } from './pages/HouseholdSetup'
 import type { CatalogItem, ListItem, Screen } from './types'
@@ -20,6 +21,7 @@ const T = {
   amber: '#D97706', amberLight: '#FEF3C7', amberText: '#92400E',
   red: '#DC2626', redLight: '#FEE2E2',
   purchased: '#9CA3AF',
+  bgAlt: '#F0EDE6',
 }
 
 const FREQ_LABELS: Record<string, string> = {
@@ -33,10 +35,9 @@ function daysUntil(dateStr: string) {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const { isAuthenticated, user, logout } = useStore()
+  const { isAuthenticated } = useStore()
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
 
-  // Auth guard
   if (!isAuthenticated) {
     return authMode === 'login'
       ? <LoginPage onSwitch={() => setAuthMode('register')} />
@@ -53,27 +54,20 @@ function AuthenticatedApp() {
   const [showAddSheet, setShowAddSheet] = useState(false)
   const [showItemSheet, setShowItemSheet] = useState<CatalogItem | null>(null)
 
-  // Data fetching
   useHouseholds()
   const { data: lists = [] } = useLists(activeHouseholdId ?? undefined)
   useListItems(activeListId ?? '')
   const { data: recurringData = [] } = useRecurring(activeHouseholdId ?? '')
 
-  // Offline sync + WebSocket
   useOfflineSync(activeListId ?? '')
   useListWebSocket(activeListId ?? '')
 
   const { toast, clearToast, showToast, isOffline } = useStore()
-  const activeList = lists.find((l: any) => l.id === activeListId)
   const items = useStore(selectActiveItems)
   const toggleItem = useToggleItem(activeListId ?? '')
   const deleteItem = useDeleteItem(activeListId ?? '')
   const addItem = useAddItem(activeListId ?? '')
-  const createList = useCreateList()
 
-  const handleCreateList = () => createList.mutate({ name: 'רשימת קניות', emoji: '🛒' })
-
-  // Household not set up yet
   if (!activeHouseholdId && households.length === 0) {
     return <HouseholdSetupPage />
   }
@@ -117,22 +111,13 @@ function AuthenticatedApp() {
         setActiveList={setActiveList}
         pendingCount={pendingCount} totalCount={items.length}
         suggestionCount={suggestions.length}
-        onCreateList={handleCreateList}
       />
 
       <div style={{ paddingBottom: 100 }}>
-        {screen === 'list' && !activeListId ? (
-          <div style={{ textAlign: 'center', padding: '80px 24px' }}>
-            <div style={{ fontSize: 64, marginBottom: 16 }}>🛒</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: T.text, marginBottom: 8 }}>אין רשימות עדיין</div>
-            <div style={{ fontSize: 14, color: T.textSub, marginBottom: 28 }}>צור רשימה ראשונה כדי להתחיל</div>
-            <button onClick={handleCreateList} disabled={createList.isLoading}
-              style={{ background: T.accent, color: '#fff', border: 'none', borderRadius: 16, padding: '14px 32px', fontSize: 16, fontWeight: 700 }}>
-              {createList.isLoading ? '...' : '+ צור רשימה'}
-            </button>
-          </div>
-        ) : screen === 'list' && (
-          <ListScreen            items={items}
+        {screen === 'list' && (
+          <ListScreen
+            items={items}
+            listId={activeListId ?? ''}
             suggestions={suggestions}
             onToggle={(id: string) => toggleItem.mutate({ itemId: id, status: items.find(i => i.id === id)?.status === 'pending' ? 'purchased' : 'pending' })}
             onDelete={(id: string) => deleteItem.mutate(id)}
@@ -192,7 +177,7 @@ function AuthenticatedApp() {
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
-function Header({ screen, setScreen, lists, activeListId, setActiveList, pendingCount, totalCount, suggestionCount, onCreateList }: any) {
+function Header({ screen, setScreen, lists, activeListId, setActiveList, pendingCount, totalCount, suggestionCount }: any) {
   const { logout } = useStore()
   if (screen !== 'list') {
     const titles: Record<string, string> = { shopping: 'מצב קנייה', recurring: 'פריטים קבועים', catalog: 'קטלוג' }
@@ -228,16 +213,13 @@ function Header({ screen, setScreen, lists, activeListId, setActiveList, pending
             <button onClick={logout} style={{ background: T.surfaceAlt, border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, color: T.textSub }}>יציאה</button>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto' as const, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, overflowX: 'auto' as const }}>
           {lists.map((l: any) => (
             <button key={l.id} onClick={() => setActiveList(l.id)}
               style={{ background: l.id === activeListId ? T.accent : T.surfaceAlt, color: l.id === activeListId ? '#fff' : T.textSub, border: 'none', borderRadius: 20, padding: '5px 14px', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' as const, flexShrink: 0 }}>
               {l.emoji} {l.name}
             </button>
           ))}
-          <button onClick={onCreateList}
-            style={{ background: 'transparent', color: T.textSub, border: `1.5px dashed ${T.borderStrong}`, borderRadius: 20, padding: '4px 12px', fontSize: 18, flexShrink: 0, lineHeight: 1 }}
-            title="צור רשימה חדשה">+</button>
         </div>
       </div>
     </div>
@@ -245,7 +227,7 @@ function Header({ screen, setScreen, lists, activeListId, setActiveList, pending
 }
 
 // ── List Screen ───────────────────────────────────────────────────────────────
-function ListScreen({ items, suggestions, onToggle, onDelete, onAddSuggestion }: any) {
+function ListScreen({ items, listId, suggestions, onToggle, onDelete, onAddSuggestion }: any) {
   const { data: categories = [] } = useCategories()
   const catMap = Object.fromEntries((categories as any[]).map((c: any) => [c.id, c]))
   const [showSugg, setShowSugg] = useState(true)
@@ -303,10 +285,10 @@ function ListScreen({ items, suggestions, onToggle, onDelete, onAddSuggestion }:
                 <div style={{ padding: '8px 16px 4px', fontSize: 11, fontWeight: 700, color: T.textSub, letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span>{cat?.icon}</span> {cat?.name_he}
                 </div>
-                {pending.map((item) => <ItemRow key={item.id} item={item} onToggle={onToggle} onDelete={onDelete} />)}
+                {pending.map((item) => <ItemRow key={item.id} item={item} listId={listId} onToggle={onToggle} onDelete={onDelete} />)}
               </>
             )}
-            {purchased.map((item) => <ItemRow key={item.id} item={item} onToggle={onToggle} onDelete={onDelete} purchased />)}
+            {purchased.map((item) => <ItemRow key={item.id} item={item} listId={listId} onToggle={onToggle} onDelete={onDelete} purchased />)}
           </div>
         )
       })}
@@ -315,52 +297,226 @@ function ListScreen({ items, suggestions, onToggle, onDelete, onAddSuggestion }:
 }
 
 // ── Item Row ──────────────────────────────────────────────────────────────────
-function ItemRow({ item, onToggle, onDelete, purchased }: { item: ListItem; onToggle: (id: string) => void; onDelete: (id: string) => void; purchased?: boolean }) {
-  const [showMenu, setShowMenu] = useState(false)
-  const pressTimer = useRef<ReturnType<typeof setTimeout>>()
-  const cat = item.catalog_item
+function ItemRow({ item, listId, onToggle, onDelete, purchased }: { item: ListItem; listId: string; onToggle: (id: string) => void; onDelete: (id: string) => void; purchased?: boolean }) {
+  const cat = item.catalog_item as any
+  const updateItem = useUpdateItem(listId)
+  const [editOpen, setEditOpen] = useState(false)
+  const [swipeX, setSwipeX] = useState(0)
+  const touchStartX = useRef(0)
+  const SWIPE_THRESHOLD = 72
+
+  const changeQty = (delta: number) => {
+    const current = parseFloat(String(item.quantity))
+    const step = current >= 2 ? 1 : 0.25
+    const next = Math.max(0.25, current + (delta > 0 ? step : -step))
+    updateItem.mutate({ itemId: item.id, quantity: next })
+  }
+
+  const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const diff = touchStartX.current - e.changedTouches[0].clientX
+    setSwipeX(diff > SWIPE_THRESHOLD ? -SWIPE_THRESHOLD : 0)
+  }
 
   return (
     <>
-      <div
-        className="row-tap"
-        onMouseDown={() => { pressTimer.current = setTimeout(() => setShowMenu(true), 420) }}
-        onMouseUp={() => clearTimeout(pressTimer.current)}
-        onTouchStart={() => { pressTimer.current = setTimeout(() => setShowMenu(true), 420) }}
-        onTouchEnd={() => clearTimeout(pressTimer.current)}
-        style={{ display: 'flex', alignItems: 'center', padding: '13px 16px', gap: 12, background: T.surface, borderBottom: `1px solid ${T.border}`, opacity: purchased ? 0.55 : 1, minHeight: 58 }}
-      >
-        <div onClick={() => onToggle(item.id)}
-          style={{ width: 26, height: 26, borderRadius: '50%', flexShrink: 0, border: purchased ? `2px solid ${T.accent}` : `2px solid ${T.borderStrong}`, background: purchased ? T.accentLight : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }}>
-          {purchased && <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+      {editOpen && <EditItemSheet item={item} listId={listId} onClose={() => setEditOpen(false)} />}
+
+      <div style={{ position: 'relative', overflow: 'hidden', borderBottom: `1px solid ${T.border}` }}>
+        {/* Swipe-revealed action buttons */}
+        <div style={{
+          position: 'absolute', top: 0, bottom: 0, right: 0,
+          display: 'flex', alignItems: 'stretch',
+          width: SWIPE_THRESHOLD * 2,
+          transform: `translateX(${swipeX === 0 ? '100%' : '0'})`,
+          transition: 'transform 0.2s',
+        }}>
+          <button
+            onClick={() => { setSwipeX(0); setEditOpen(true) }}
+            style={{ flex: 1, background: '#4A90D9', color: '#fff', border: 'none', fontSize: 18, fontWeight: 600 }}
+          >✏️</button>
+          <button
+            onClick={() => { setSwipeX(0); onDelete(item.id) }}
+            style={{ flex: 1, background: T.red, color: '#fff', border: 'none', fontSize: 18, fontWeight: 600 }}
+          >🗑</button>
         </div>
-        <div onClick={() => onToggle(item.id)} style={{ flex: 1, cursor: 'pointer', userSelect: 'none' as const }}>
-          <div style={{ fontSize: 15, fontWeight: 500, color: purchased ? T.purchased : T.text, textDecoration: purchased ? 'line-through' : 'none' }}>
-            {cat?.name_he}
+
+        {/* Main row */}
+        <div
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          onClick={() => swipeX !== 0 ? setSwipeX(0) : undefined}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+            background: T.surface, opacity: purchased ? 0.55 : 1,
+            transform: `translateX(${swipeX}px)`, transition: 'transform 0.2s',
+            minHeight: 58,
+          }}
+        >
+          {/* Checkbox */}
+          <div
+            onClick={() => onToggle(item.id)}
+            style={{ width: 26, height: 26, borderRadius: '50%', flexShrink: 0, border: purchased ? `2px solid ${T.accent}` : `2px solid ${T.borderStrong}`, background: purchased ? T.accentLight : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
+          >
+            {purchased && <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
           </div>
-          <div style={{ fontSize: 12, color: T.textSub }}>
-            {item.quantity} {item.unit}{item.note ? ` · ${item.note}` : ''}
+
+          {/* Thumbnail */}
+          {cat?.image_url && (
+            <img src={cat.image_url} alt="" style={{ width: 34, height: 34, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+          )}
+
+          {/* Text */}
+          <div style={{ flex: 1, minWidth: 0 }} onClick={() => onToggle(item.id)}>
+            <div style={{ fontSize: 15, fontWeight: 500, color: purchased ? T.purchased : T.text, textDecoration: purchased ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }}>
+              {cat?.name_he}
+            </div>
+            {item.note && (
+              <div style={{ fontSize: 11, color: T.textSub, marginTop: 1 }}>{item.note}</div>
+            )}
           </div>
+
+          {/* Quantity stepper (inline, only when pending) */}
+          {!purchased && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              <button
+                onClick={e => { e.stopPropagation(); changeQty(-1) }}
+                style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${T.border}`, background: T.bgAlt, color: T.accent, fontWeight: 700, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+              >−</button>
+              <span style={{ fontSize: 13, fontWeight: 600, color: T.text, minWidth: 38, textAlign: 'center' }}>
+                {Number(item.quantity) % 1 === 0 ? Number(item.quantity) : item.quantity} {item.unit}
+              </span>
+              <button
+                onClick={e => { e.stopPropagation(); changeQty(1) }}
+                style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${T.border}`, background: T.bgAlt, color: T.accent, fontWeight: 700, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+              >+</button>
+            </div>
+          )}
+
+          {/* Edit button */}
+          <button
+            onClick={e => { e.stopPropagation(); setEditOpen(true) }}
+            style={{ background: 'none', border: 'none', fontSize: 15, color: T.textSub, padding: '4px', flexShrink: 0 }}
+          >✏️</button>
         </div>
       </div>
-
-      {showMenu && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-end' }} onClick={() => setShowMenu(false)}>
-          <div className="sheet-up" onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', padding: '8px 0 28px' }}>
-            <div style={{ padding: '12px 20px', borderBottom: `1px solid ${T.border}`, fontSize: 16, fontWeight: 600 }}>{cat?.name_he}</div>
-            {[
-              { label: purchased ? 'סמן כממתין' : 'סמן כנקנה', icon: '✓', action: () => { onToggle(item.id); setShowMenu(false) } },
-              { label: 'מחק פריט', icon: '🗑', danger: true, action: () => { onDelete(item.id); setShowMenu(false) } },
-            ].map((opt) => (
-              <div key={opt.label} onClick={opt.action}
-                style={{ padding: '14px 20px', display: 'flex', gap: 14, alignItems: 'center', cursor: 'pointer', color: opt.danger ? T.red : T.text, fontSize: 15 }}>
-                <span style={{ fontSize: 18 }}>{opt.icon}</span> {opt.label}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </>
+  )
+}
+
+// ── Edit Item Sheet ────────────────────────────────────────────────────────────
+function EditItemSheet({ item, listId, onClose }: { item: ListItem; listId: string; onClose: () => void }) {
+  const cat = item.catalog_item as any
+  const updateItem = useUpdateItem(listId)
+  const uploadImage = useUploadCatalogImage()
+
+  const [qty, setQty] = useState(String(item.quantity))
+  const [unit, setUnit] = useState(item.unit)
+  const [note, setNote] = useState(item.note ?? '')
+  const [imagePreview, setImagePreview] = useState<string | null>(cat?.image_url ?? null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const save = async () => {
+    await updateItem.mutateAsync({
+      itemId: item.id,
+      quantity: parseFloat(qty) || 1,
+      unit,
+      note,
+    })
+    onClose()
+  }
+
+  const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !cat?.id) return
+    setImagePreview(URL.createObjectURL(file))
+    await uploadImage.mutateAsync({ itemId: cat.id, file })
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <div className="sheet-up" onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', padding: '0 0 32px', maxHeight: '90vh', overflowY: 'auto' }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 12px', borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 17, fontWeight: 700 }}>עריכת פריט</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: T.textSub, padding: 4 }}>✕</button>
+        </div>
+
+        <div style={{ padding: '20px 20px 0' }}>
+          {/* Image + name */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+            <div
+              onClick={() => fileRef.current?.click()}
+              style={{ width: 72, height: 72, borderRadius: 14, overflow: 'hidden', background: T.bgAlt, border: `2px dashed ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, position: 'relative' }}
+            >
+              {imagePreview
+                ? <img src={imagePreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <span style={{ fontSize: 28, opacity: 0.4 }}>📷</span>
+              }
+              <div style={{ position: 'absolute', bottom: 2, right: 2, background: T.accent, borderRadius: 6, width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ color: '#fff', fontSize: 10, fontWeight: 700 }}>+</span>
+              </div>
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImagePick} />
+            <div>
+              <div style={{ fontSize: 17, fontWeight: 600 }}>{cat?.name_he}</div>
+              {cat?.name_en && <div style={{ fontSize: 13, color: T.textSub }}>{cat.name_en}</div>}
+              <div style={{ fontSize: 11, color: T.textSub, marginTop: 2 }}>לחץ על התמונה להוספה/החלפה</div>
+            </div>
+          </div>
+
+          {/* Quantity row */}
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 6 }}>כמות ויחידות</label>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden', flex: 1 }}>
+                <button
+                  onClick={() => setQty(v => String(Math.max(0.25, parseFloat(v) - (parseFloat(v) >= 2 ? 1 : 0.25))))}
+                  style={{ background: 'none', border: 'none', padding: '10px 16px', fontSize: 20, color: T.accent, fontWeight: 700 }}
+                >−</button>
+                <input
+                  type="number"
+                  value={qty}
+                  onChange={e => setQty(e.target.value)}
+                  style={{ flex: 1, textAlign: 'center', border: 'none', outline: 'none', fontSize: 16, fontWeight: 600, background: 'transparent', color: T.text }}
+                  min="0.25" step="0.25"
+                />
+                <button
+                  onClick={() => setQty(v => String(parseFloat(v) + (parseFloat(v) >= 2 ? 1 : 0.25)))}
+                  style={{ background: 'none', border: 'none', padding: '10px 16px', fontSize: 20, color: T.accent, fontWeight: 700 }}
+                >+</button>
+              </div>
+              <input
+                value={unit}
+                onChange={e => setUnit(e.target.value)}
+                placeholder="יחידות"
+                style={{ width: 90, border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 12px', fontSize: 14, background: T.bg, color: T.text, textAlign: 'center' }}
+              />
+            </div>
+          </div>
+
+          {/* Note */}
+          <div style={{ marginBottom: 24 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 6 }}>הערה</label>
+            <input
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="לדוגמה: ללא גלוטן, מותג X..."
+              style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '11px 14px', fontSize: 14, background: T.bg, color: T.text }}
+            />
+          </div>
+
+          <button
+            onClick={save}
+            disabled={updateItem.isLoading}
+            style={{ width: '100%', background: T.accent, color: '#fff', border: 'none', borderRadius: 12, padding: '14px', fontSize: 16, fontWeight: 700 }}
+          >
+            {updateItem.isLoading ? 'שומר...' : '💾 שמור שינויים'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -372,39 +528,33 @@ function ShoppingMode({ items, onToggle }: { items: ListItem[]; onToggle: (id: s
   items.forEach((i) => { const c = i.catalog_item?.category_id ?? 'other'; if (!byCat[c]) byCat[c] = []; byCat[c].push(i) })
 
   const done = items.filter(i => i.status === 'purchased').length
-  const pct = items.length ? Math.round(done / items.length * 100) : 0
+  const pct = items.length ? Math.round((done / items.length) * 100) : 0
 
   return (
     <div>
-      <div style={{ background: T.surface, padding: '14px 16px', borderBottom: `1px solid ${T.border}` }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, color: T.textSub }}>
-          <span>התקדמות</span>
-          <span style={{ fontWeight: 700, color: pct === 100 ? T.accent : T.text }}>{pct}%</span>
+      <div style={{ padding: '12px 16px', background: T.surface, borderBottom: `1px solid ${T.border}`, position: 'sticky' as const, top: 57, zIndex: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13, color: T.textSub }}>
+          <span>התקדמות</span><span>{done} / {items.length}</span>
         </div>
-        <div style={{ background: T.surfaceAlt, borderRadius: 10, height: 8, overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${pct}%`, background: pct === 100 ? T.accent : T.amber, borderRadius: 10, transition: 'width 0.4s' }} />
+        <div style={{ height: 6, background: T.border, borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${pct}%`, background: T.accent, borderRadius: 3, transition: 'width 0.3s' }} />
         </div>
-        <div style={{ marginTop: 6, fontSize: 12, color: T.textSub }}>{done} מתוך {items.length} נקנו</div>
       </div>
-
       {Object.entries(byCat).map(([catId, catItems]) => {
         const cat = catMap[catId] as any
-        const pending = catItems.filter(i => i.status === 'pending')
-        const purchased = catItems.filter(i => i.status === 'purchased')
         return (
-          <div key={catId}>
-            <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 700, color: T.textSub, background: T.bg, position: 'sticky' as const, top: 57, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>{cat?.icon}</span> {cat?.name_he?.toUpperCase()}
-              <span style={{ marginRight: 'auto', fontWeight: 400, fontSize: 11 }}>{purchased.length}/{catItems.length}</span>
+          <div key={catId} style={{ marginBottom: 8 }}>
+            <div style={{ padding: '10px 16px 4px', fontSize: 11, fontWeight: 700, color: T.textSub, letterSpacing: '0.05em' }}>
+              {cat?.icon} {cat?.name_he}
             </div>
-            {[...pending, ...purchased].map((item) => (
-              <div key={item.id} className="row-tap" onClick={() => onToggle(item.id)}
-                style={{ display: 'flex', alignItems: 'center', padding: '16px', gap: 14, background: item.status === 'purchased' ? T.surfaceAlt : T.surface, borderBottom: `1px solid ${T.border}`, cursor: 'pointer', minHeight: 64 }}>
-                <div style={{ width: 30, height: 30, borderRadius: '50%', flexShrink: 0, border: item.status === 'purchased' ? `2px solid ${T.accent}` : `2px solid ${T.borderStrong}`, background: item.status === 'purchased' ? T.accentLight : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.25s' }}>
-                  {item.status === 'purchased' && <svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 7l4 4 6-6" fill="none" stroke={T.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+            {catItems.map(item => (
+              <div key={item.id} onClick={() => onToggle(item.id)}
+                style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', gap: 12, background: T.surface, borderBottom: `1px solid ${T.border}`, cursor: 'pointer', opacity: item.status === 'purchased' ? 0.5 : 1 }}>
+                <div style={{ width: 28, height: 28, borderRadius: '50%', border: item.status === 'purchased' ? `2px solid ${T.accent}` : `2px solid ${T.borderStrong}`, background: item.status === 'purchased' ? T.accentLight : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {item.status === 'purchased' && <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" /></svg>}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 16, fontWeight: item.status === 'purchased' ? 400 : 500, color: item.status === 'purchased' ? T.purchased : T.text, textDecoration: item.status === 'purchased' ? 'line-through' : 'none' }}>
+                  <div style={{ fontSize: 15, fontWeight: item.status === 'purchased' ? 400 : 500, color: item.status === 'purchased' ? T.purchased : T.text, textDecoration: item.status === 'purchased' ? 'line-through' : 'none' }}>
                     {item.catalog_item?.name_he}
                   </div>
                   <div style={{ fontSize: 13, color: T.textSub }}>{item.quantity} {item.unit}{item.note ? ` · ${item.note}` : ''}</div>
@@ -425,48 +575,26 @@ function AddItemSheet({ activeListId, onClose, onSelect }: { activeListId: strin
   const { data: cats = [] } = useCategories()
   const { data: results } = useCatalogSearch(q)
   const items = useStore(selectActiveItems)
-  const recentIds = [...new Set(items.map(i => i.catalog_item_id))].slice(0, 5)
 
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 120) }, [])
 
   const catalogItems = (results as any)?.items ?? []
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
-      <div className="sheet-up" onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', maxHeight: '82vh', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ width: 40, height: 4, background: T.border, borderRadius: 2, margin: '10px auto' }} />
-        <div style={{ padding: '0 16px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', background: T.surfaceAlt, borderRadius: 14, padding: '0 12px', border: `1px solid ${T.border}` }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <div className="sheet-up" onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' as const }}>
+        <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: T.surfaceAlt, borderRadius: 12, padding: '0 12px', border: `1px solid ${T.border}` }}>
             <span style={{ color: T.textHint, marginLeft: 8 }}>🔍</span>
-            <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="חפש פריט..." dir="rtl"
-              style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 15, padding: '12px 4px', color: T.text, outline: 'none' }} />
-            {q && <button onClick={() => setQ('')} style={{ background: 'none', border: 'none', color: T.textHint, fontSize: 18 }}>×</button>}
+            <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="חיפוש פריט..." dir="rtl"
+              style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 15, padding: '12px 4px', outline: 'none', color: T.text }} />
           </div>
         </div>
-
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {!q && recentIds.length > 0 && (
-            <div style={{ padding: '0 16px 12px' }}>
-              <div style={{ fontSize: 11, color: T.textSub, fontWeight: 700, marginBottom: 8 }}>אחרונים</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' as const }}>
-                {recentIds.map((id) => {
-                  const cat = items.find(i => i.catalog_item_id === id)?.catalog_item
-                  if (!cat) return null
-                  return (
-                    <button key={id} onClick={() => onSelect(cat)}
-                      style={{ background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 20, padding: '6px 12px', fontSize: 13, color: T.text }}>
-                      {cat.name_he}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
+        <div style={{ overflowY: 'auto' as const, flex: 1 }}>
           {catalogItems.map((c: CatalogItem) => (
             <div key={c.id} className="row-tap" onClick={() => onSelect(c)}
-              style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', gap: 12, borderBottom: `1px solid ${T.border}`, cursor: 'pointer' }}>
-              <div style={{ width: 42, height: 42, borderRadius: 10, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden' }}>
+              style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', gap: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ width: 42, height: 42, borderRadius: 10, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
                 {c.image_url ? <img src={c.image_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <span style={{ fontSize: 22 }}>📦</span>}
               </div>
               <div style={{ flex: 1 }}>
@@ -631,7 +759,7 @@ function RecurringScreen({ householdId, recurringData }: { householdId: string; 
           <div className="sheet-up" onClick={(e) => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', padding: '0 0 32px' }}>
             <div style={{ width: 40, height: 4, background: T.border, borderRadius: 2, margin: '10px auto 0' }} />
             <div style={{ padding: '12px 16px 0', fontWeight: 700, fontSize: 17, borderBottom: `1px solid ${T.border}`, paddingBottom: 12 }}>פריט קבוע חדש</div>
-            <div style={{ padding: '16px 16px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ padding: '16px 16px 0', display: 'flex', flexDirection: 'column' as const, gap: 14 }}>
               <div>
                 <div style={{ fontSize: 12, color: T.textSub, fontWeight: 700, marginBottom: 6 }}>תדירות</div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const }}>
@@ -643,21 +771,14 @@ function RecurringScreen({ householdId, recurringData }: { householdId: string; 
                   ))}
                 </div>
               </div>
-              <div>
-                <div style={{ fontSize: 12, color: T.textSub, fontWeight: 700, marginBottom: 8 }}>אופן הוספה</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {[{ v: true, l: 'אוטומטי', d: 'מוסיף לרשימה' }, { v: false, l: 'שאל אותי', d: 'מוצג כהצעה' }].map(({ v, l, d }) => (
-                    <div key={String(v)} onClick={() => setForm(f => ({ ...f, auto_add: v }))}
-                      style={{ flex: 1, padding: 10, borderRadius: 12, cursor: 'pointer', textAlign: 'center', border: form.auto_add === v ? `1.5px solid ${T.accent}` : `1px solid ${T.border}`, background: form.auto_add === v ? T.accentLight : T.surfaceAlt }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: form.auto_add === v ? T.accentText : T.text }}>{l}</div>
-                      <div style={{ fontSize: 11, color: T.textSub }}>{d}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <button onClick={() => { create.mutate(form); setShowCreate(false) }}
-                style={{ padding: 15, fontSize: 15, fontWeight: 700, background: T.accent, color: '#fff', border: 'none', borderRadius: 16, cursor: 'pointer' }}>
-                שמור
+              <button
+                onClick={() => {
+                  if (!form.catalog_item_id) return
+                  create.mutate(form)
+                  setShowCreate(false)
+                }}
+                style={{ padding: 14, background: T.accent, color: '#fff', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700 }}>
+                שמור פריט קבוע
               </button>
             </div>
           </div>
@@ -669,15 +790,13 @@ function RecurringScreen({ householdId, recurringData }: { householdId: string; 
 
 function RecurringRow({ r, onToggle, paused }: { r: any; onToggle: (r: any) => void; paused?: boolean }) {
   const days = daysUntil(r.next_run_date)
-  const urgency = days <= 1 ? T.red : days <= 3 ? T.amber : T.accent
   return (
-    <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 12, borderBottom: `1px solid ${T.border}`, opacity: paused ? 0.55 : 1 }}>
+    <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', gap: 12, borderBottom: `1px solid ${T.border}`, opacity: paused ? 0.5 : 1 }}>
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 500 }}>{r.catalog_item?.name_he}</div>
-        <div style={{ fontSize: 12, color: T.textSub, display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 }}>
+        <div style={{ fontSize: 12, color: T.textSub, marginTop: 2, display: 'flex', gap: 6, alignItems: 'center' }}>
           <span>{FREQ_LABELS[r.frequency]}</span>
-          {!paused && <><span style={{ width: 6, height: 6, borderRadius: '50%', background: urgency, flexShrink: 0 }} />
-          <span style={{ color: urgency, fontWeight: 600 }}>{days === 0 ? 'היום' : days === 1 ? 'מחר' : `עוד ${days} ימים`}</span></>}
+          {!paused && <><span>·</span><span style={{ color: days <= 1 ? T.accent : T.textSub }}>{days === 0 ? 'היום' : days === 1 ? 'מחר' : `עוד ${days} ימים`}</span></>}
         </div>
       </div>
       <button onClick={() => onToggle(r)}
@@ -692,18 +811,32 @@ function RecurringRow({ r, onToggle, paused }: { r: any; onToggle: (r: any) => v
 function CatalogScreen() {
   const [q, setQ] = useState('')
   const [catFilter, setCatFilter] = useState<string | undefined>()
+  const [editItem, setEditItem] = useState<any | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+
   const { data: cats = [] } = useCategories()
   const { data: results } = useCatalogSearch(q, catFilter)
-  const items = (results as any)?.items ?? []
+  const catalogItems = (results as any)?.items ?? []
+  const deleteCatalogItem = useDeleteCatalogItem()
+  const updateCatalogItem = useUpdateCatalogItem()
 
   return (
     <div>
+      {/* Search + Add button */}
       <div style={{ padding: '12px 16px', background: T.surface, borderBottom: `1px solid ${T.border}`, position: 'sticky' as const, top: 57, zIndex: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', background: T.surfaceAlt, borderRadius: 12, padding: '0 12px', border: `1px solid ${T.border}`, marginBottom: 10 }}>
-          <span style={{ color: T.textHint, marginLeft: 8 }}>🔍</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="חיפוש בקטלוג..." dir="rtl"
-            style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 14, padding: '10px 4px', outline: 'none', color: T.text }} />
+        <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: T.surfaceAlt, borderRadius: 12, padding: '0 12px', border: `1px solid ${T.border}`, flex: 1 }}>
+            <span style={{ color: T.textHint, marginLeft: 8 }}>🔍</span>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="חיפוש בקטלוג..." dir="rtl"
+              style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 14, padding: '10px 4px', outline: 'none', color: T.text }} />
+          </div>
+          <button
+            onClick={() => setCreateOpen(true)}
+            style={{ background: T.accent, color: '#fff', border: 'none', borderRadius: 10, padding: '0 16px', fontWeight: 700, fontSize: 14, flexShrink: 0 }}
+          >+ הוסף</button>
         </div>
+
+        {/* Category chips */}
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto' as const }}>
           <button onClick={() => setCatFilter(undefined)}
             style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, border: 'none', background: !catFilter ? T.accent : T.surfaceAlt, color: !catFilter ? '#fff' : T.textSub, whiteSpace: 'nowrap' as const, flexShrink: 0 }}>
@@ -717,17 +850,258 @@ function CatalogScreen() {
           ))}
         </div>
       </div>
-      {items.map((c: CatalogItem) => (
-        <div key={c.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', gap: 12, borderBottom: `1px solid ${T.border}`, background: T.surface }}>
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
-            {c.image_url ? <img src={c.image_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" /> : <span style={{ fontSize: 22 }}>📦</span>}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 500 }}>{c.name_he}</div>
-            <div style={{ fontSize: 12, color: T.textSub }}>{c.default_qty} {c.default_unit}</div>
-          </div>
+
+      {/* Items list */}
+      {catalogItems.length === 0 && (
+        <div style={{ textAlign: 'center', padding: 40, color: T.textHint }}>
+          {q ? 'לא נמצאו פריטים' : 'הקטלוג ריק. לחץ "+ הוסף" ליצירת פריט ראשון.'}
         </div>
+      )}
+      {catalogItems.map((ci: any) => (
+        <CatalogItemRow
+          key={ci.id}
+          item={ci}
+          categories={cats as any[]}
+          onEdit={() => setEditItem(ci)}
+          onDelete={() => deleteCatalogItem.mutate(ci.id)}
+        />
       ))}
+
+      {/* Edit sheet */}
+      {editItem && (
+        <EditCatalogItemSheet
+          item={editItem}
+          categories={cats as any[]}
+          onClose={() => setEditItem(null)}
+          onSave={data => updateCatalogItem.mutateAsync({ itemId: editItem.id, ...data }).then(() => setEditItem(null))}
+        />
+      )}
+
+      {/* Create sheet */}
+      {createOpen && (
+        <CreateCatalogItemSheet
+          categories={cats as any[]}
+          onClose={() => setCreateOpen(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Catalog Item Row ──────────────────────────────────────────────────────────
+function CatalogItemRow({ item, categories, onEdit, onDelete }: { item: any; categories: any[]; onEdit: () => void; onDelete: () => void }) {
+  const cat = categories.find(c => c.id === item.category_id)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const uploadImage = useUploadCatalogImage()
+  const [imgPreview, setImgPreview] = useState<string | null>(item.image_url ?? null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImgPreview(URL.createObjectURL(file))
+    await uploadImage.mutateAsync({ itemId: item.id, file })
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderBottom: `1px solid ${T.border}`, background: T.surface }}>
+      {/* Tappable image */}
+      <div
+        onClick={() => fileRef.current?.click()}
+        style={{ width: 48, height: 48, borderRadius: 10, overflow: 'hidden', background: T.bgAlt, border: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, position: 'relative' }}
+      >
+        {imgPreview
+          ? <img src={imgPreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          : <span style={{ fontSize: 22 }}>{cat?.icon ?? '📦'}</span>
+        }
+        <div style={{ position: 'absolute', bottom: 1, right: 1, background: T.accent, borderRadius: 4, width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ color: '#fff', fontSize: 9, fontWeight: 700 }}>+</span>
+        </div>
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
+
+      {/* Info */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 500, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name_he}</div>
+        <div style={{ fontSize: 11, color: T.textSub }}>
+          {cat?.name_he} · {item.default_qty} {item.default_unit}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        <button onClick={onEdit} style={{ background: T.bgAlt, border: `1px solid ${T.border}`, borderRadius: 8, padding: '6px 10px', fontSize: 13, color: T.text }}>✏️</button>
+        {confirmDelete ? (
+          <button onClick={() => { onDelete(); setConfirmDelete(false) }} style={{ background: T.red, border: 'none', borderRadius: 8, padding: '6px 10px', fontSize: 12, color: '#fff', fontWeight: 600 }}>אשר</button>
+        ) : (
+          <button onClick={() => setConfirmDelete(true)} style={{ background: T.bgAlt, border: `1px solid ${T.border}`, borderRadius: 8, padding: '6px 10px', fontSize: 13, color: T.red }}>🗑</button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Edit Catalog Item Sheet ────────────────────────────────────────────────────
+function EditCatalogItemSheet({ item, categories, onClose, onSave }: { item: any; categories: any[]; onClose: () => void; onSave: (data: any) => Promise<void> }) {
+  const [nameHe, setNameHe] = useState(item.name_he)
+  const [nameEn, setNameEn] = useState(item.name_en ?? '')
+  const [categoryId, setCategoryId] = useState(item.category_id)
+  const [defaultQty, setDefaultQty] = useState(String(item.default_qty))
+  const [defaultUnit, setDefaultUnit] = useState(item.default_unit)
+  const [barcode, setBarcode] = useState(item.barcode ?? '')
+  const [saving, setSaving] = useState(false)
+  const [imgPreview, setImgPreview] = useState<string | null>(item.image_url ?? null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const uploadImage = useUploadCatalogImage()
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImgPreview(URL.createObjectURL(file))
+    await uploadImage.mutateAsync({ itemId: item.id, file })
+  }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await onSave({ name_he: nameHe, name_en: nameEn || undefined, category_id: categoryId, default_qty: parseFloat(defaultQty) || 1, default_unit: defaultUnit, barcode: barcode || undefined })
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <div className="sheet-up" onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', padding: '0 0 32px', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 12px', borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 17, fontWeight: 700 }}>עריכת פריט קטלוג</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: T.textSub }}>✕</button>
+        </div>
+        <div style={{ padding: '20px' }}>
+          {/* Image */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+            <div onClick={() => fileRef.current?.click()} style={{ width: 90, height: 90, borderRadius: 16, overflow: 'hidden', background: T.bgAlt, border: `2px dashed ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative' }}>
+              {imgPreview ? <img src={imgPreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 36, opacity: 0.4 }}>📷</span>}
+              <div style={{ position: 'absolute', bottom: 4, right: 4, background: T.accent, borderRadius: 8, width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ color: '#fff', fontSize: 12, fontWeight: 700 }}>+</span>
+              </div>
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
+          </div>
+
+          {/* Fields */}
+          {[
+            { label: 'שם בעברית *', value: nameHe, setter: setNameHe, placeholder: 'שם הפריט' },
+            { label: 'שם באנגלית', value: nameEn, setter: setNameEn, placeholder: 'English name (optional)' },
+            { label: 'ברקוד', value: barcode, setter: setBarcode, placeholder: '1234567890' },
+          ].map(({ label, value, setter, placeholder }) => (
+            <div key={label} style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>{label}</label>
+              <input value={value} onChange={e => setter(e.target.value)} placeholder={placeholder} style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }} />
+            </div>
+          ))}
+
+          {/* Category */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>קטגוריה</label>
+            <select value={categoryId} onChange={e => setCategoryId(e.target.value)} style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }}>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name_he}</option>)}
+            </select>
+          </div>
+
+          {/* Qty + unit */}
+          <div style={{ marginBottom: 20, display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>כמות ברירת מחדל</label>
+              <input type="number" value={defaultQty} onChange={e => setDefaultQty(e.target.value)} min="0.25" step="0.25" style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>יחידה</label>
+              <input value={defaultUnit} onChange={e => setDefaultUnit(e.target.value)} style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }} />
+            </div>
+          </div>
+
+          <button onClick={save} disabled={saving || !nameHe.trim()} style={{ width: '100%', background: T.accent, color: '#fff', border: 'none', borderRadius: 12, padding: 14, fontSize: 16, fontWeight: 700 }}>
+            {saving ? 'שומר...' : '💾 שמור שינויים'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Create Catalog Item Sheet ─────────────────────────────────────────────────
+function CreateCatalogItemSheet({ categories, onClose }: { categories: any[]; onClose: () => void }) {
+  const createItem = useCreateCatalogItem()
+  const uploadImage = useUploadCatalogImage()
+
+  const [nameHe, setNameHe] = useState('')
+  const [categoryId, setCategoryId] = useState(categories[0]?.id ?? '')
+  const [defaultQty, setDefaultQty] = useState('1')
+  const [defaultUnit, setDefaultUnit] = useState('יחידות')
+  const [imgPreview, setImgPreview] = useState<string | null>(null)
+  const [createdId, setCreatedId] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImgPreview(URL.createObjectURL(file))
+    if (createdId) await uploadImage.mutateAsync({ itemId: createdId, file })
+  }
+
+  const create = async () => {
+    if (!nameHe.trim()) return
+    const res = await createItem.mutateAsync({ name_he: nameHe.trim(), category_id: categoryId, default_qty: parseFloat(defaultQty) || 1, default_unit: defaultUnit }) as any
+    setCreatedId(res.id)
+    if (fileRef.current?.files?.[0]) {
+      await uploadImage.mutateAsync({ itemId: res.id, file: fileRef.current.files[0] })
+    }
+    onClose()
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <div className="sheet-up" onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: '20px 20px 0 0', width: '100%', padding: '0 0 32px', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 12px', borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 17, fontWeight: 700 }}>פריט חדש בקטלוג</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: T.textSub }}>✕</button>
+        </div>
+        <div style={{ padding: 20 }}>
+          {/* Image */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+            <div onClick={() => fileRef.current?.click()} style={{ width: 80, height: 80, borderRadius: 14, overflow: 'hidden', background: T.bgAlt, border: `2px dashed ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              {imgPreview ? <img src={imgPreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 32, opacity: 0.4 }}>📷</span>}
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>שם בעברית *</label>
+            <input value={nameHe} onChange={e => setNameHe(e.target.value)} autoFocus placeholder="שם הפריט" style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }} />
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>קטגוריה</label>
+            <select value={categoryId} onChange={e => setCategoryId(e.target.value)} style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }}>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name_he}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>כמות</label>
+              <input type="number" value={defaultQty} onChange={e => setDefaultQty(e.target.value)} min="0.25" step="0.25" style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: T.textSub, display: 'block', marginBottom: 5 }}>יחידה</label>
+              <input value={defaultUnit} onChange={e => setDefaultUnit(e.target.value)} style={{ width: '100%', border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, background: T.bg, color: T.text }} />
+            </div>
+          </div>
+
+          <button onClick={create} disabled={createItem.isLoading || !nameHe.trim()} style={{ width: '100%', background: T.accent, color: '#fff', border: 'none', borderRadius: 12, padding: 14, fontSize: 16, fontWeight: 700 }}>
+            {createItem.isLoading ? 'יוצר...' : '+ צור פריט'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -760,7 +1134,7 @@ function BottomNav({ screen, setScreen, badgeCount }: { screen: Screen; setScree
         const active = screen === tab.id || (screen === 'shopping' && tab.id === 'list')
         return (
           <button key={tab.id} onClick={() => setScreen(tab.id)}
-            style={{ flex: 1, padding: '10px 0 8px', border: 'none', background: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer', position: 'relative' }}>
+            style={{ flex: 1, padding: '10px 0 8px', border: 'none', background: 'none', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 3, cursor: 'pointer', position: 'relative' }}>
             {(tab as any).badge > 0 && (
               <span style={{ position: 'absolute', top: 6, right: 'calc(50% - 12px)', background: T.amber, color: '#fff', width: 16, height: 16, borderRadius: '50%', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 {(tab as any).badge}
