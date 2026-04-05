@@ -5,6 +5,7 @@ import {
   useCatalogSearch, useAddItem, useToggleItem, useDeleteItem,
   useCreateCatalogItem, useRecurring, useCreateRecurring,
   useUpdateRecurring, useListWebSocket, useOfflineSync,
+  useCreateList,
 } from './hooks'
 import { LoginPage, RegisterPage } from './pages/Auth'
 import { HouseholdSetupPage } from './pages/HouseholdSetup'
@@ -68,6 +69,9 @@ function AuthenticatedApp() {
   const toggleItem = useToggleItem(activeListId ?? '')
   const deleteItem = useDeleteItem(activeListId ?? '')
   const addItem = useAddItem(activeListId ?? '')
+  const createList = useCreateList()
+
+  const handleCreateList = () => createList.mutate({ name: 'רשימת קניות', emoji: '🛒' })
 
   // Household not set up yet
   if (!activeHouseholdId && households.length === 0) {
@@ -113,12 +117,22 @@ function AuthenticatedApp() {
         setActiveList={setActiveList}
         pendingCount={pendingCount} totalCount={items.length}
         suggestionCount={suggestions.length}
+        onCreateList={handleCreateList}
       />
 
       <div style={{ paddingBottom: 100 }}>
-        {screen === 'list' && (
-          <ListScreen
-            items={items}
+        {screen === 'list' && !activeListId ? (
+          <div style={{ textAlign: 'center', padding: '80px 24px' }}>
+            <div style={{ fontSize: 64, marginBottom: 16 }}>🛒</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: T.text, marginBottom: 8 }}>אין רשימות עדיין</div>
+            <div style={{ fontSize: 14, color: T.textSub, marginBottom: 28 }}>צור רשימה ראשונה כדי להתחיל</div>
+            <button onClick={handleCreateList} disabled={createList.isLoading}
+              style={{ background: T.accent, color: '#fff', border: 'none', borderRadius: 16, padding: '14px 32px', fontSize: 16, fontWeight: 700 }}>
+              {createList.isLoading ? '...' : '+ צור רשימה'}
+            </button>
+          </div>
+        ) : screen === 'list' && (
+          <ListScreen            items={items}
             suggestions={suggestions}
             onToggle={(id: string) => toggleItem.mutate({ itemId: id, status: items.find(i => i.id === id)?.status === 'pending' ? 'purchased' : 'pending' })}
             onDelete={(id: string) => deleteItem.mutate(id)}
@@ -178,7 +192,7 @@ function AuthenticatedApp() {
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
-function Header({ screen, setScreen, lists, activeListId, setActiveList, pendingCount, totalCount, suggestionCount }: any) {
+function Header({ screen, setScreen, lists, activeListId, setActiveList, pendingCount, totalCount, suggestionCount, onCreateList }: any) {
   const { logout } = useStore()
   if (screen !== 'list') {
     const titles: Record<string, string> = { shopping: 'מצב קנייה', recurring: 'פריטים קבועים', catalog: 'קטלוג' }
@@ -214,13 +228,16 @@ function Header({ screen, setScreen, lists, activeListId, setActiveList, pending
             <button onClick={logout} style={{ background: T.surfaceAlt, border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, color: T.textSub }}>יציאה</button>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto' as const }}>
+        <div style={{ display: 'flex', gap: 8, overflowX: 'auto' as const, alignItems: 'center' }}>
           {lists.map((l: any) => (
             <button key={l.id} onClick={() => setActiveList(l.id)}
               style={{ background: l.id === activeListId ? T.accent : T.surfaceAlt, color: l.id === activeListId ? '#fff' : T.textSub, border: 'none', borderRadius: 20, padding: '5px 14px', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' as const, flexShrink: 0 }}>
               {l.emoji} {l.name}
             </button>
           ))}
+          <button onClick={onCreateList}
+            style={{ background: 'transparent', color: T.textSub, border: `1.5px dashed ${T.borderStrong}`, borderRadius: 20, padding: '4px 12px', fontSize: 18, flexShrink: 0, lineHeight: 1 }}
+            title="צור רשימה חדשה">+</button>
         </div>
       </div>
     </div>
