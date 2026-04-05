@@ -242,8 +242,10 @@ export const api = {
       apiFetch(`/lists/${listId}/members`, { method: 'POST', body: JSON.stringify(body) }),
     items: (listId: string | undefined, since?: string) =>
       apiFetch<any[]>(`/lists/${listId}/items${since ? `?since=${since}` : ''}`),
-    addItem: (listId: string, body: { catalog_item_id: string; quantity: number; unit: string; note?: string; idempotency_key?: string }) =>
-      apiFetch<any>(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify(body) }),
+    addItem: (listId: string, body: { catalog_item_id: string; quantity: number; unit: string; note?: string; idempotency_key?: string }) => {
+      if (!listId) return Promise.reject(new Error('No active list selected'))
+      return apiFetch<any>(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify(body) })
+    },
     toggleStatus: (listId: string, itemId: string, body: { status: string; vector_clock?: Record<string, number>; idempotency_key?: string }) =>
       apiFetch<any>(`/lists/${listId}/items/${itemId}/status`, { method: 'POST', body: JSON.stringify(body) }),
     deleteItem: (listId: string, itemId: string) =>
