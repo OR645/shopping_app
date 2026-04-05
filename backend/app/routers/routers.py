@@ -254,28 +254,45 @@ async def search_catalog(
     stmt = select(CatalogItem).where(CatalogItem.deleted_at.is_(None))
     if category:
         stmt = stmt.where(CatalogItem.category_id == category)
+
     if q_norm:
-        stmt = stmt.where(
+        trgm_stmt = stmt.where(
             text("similarity(name_he_normalized, :q) > 0.15").bindparams(q=q_norm)
         ).order_by(text("similarity(name_he_normalized, :q) DESC").bindparams(q=q_norm))
+        try:
+            result = await db.execute(trgm_stmt.offset(offset).limit(limit))
+            items = result.scalars().all()
+        except Exception:
+            # Fallback to ILIKE if pg_trgm not available
+            await db.rollback()
+            fallback_stmt = stmt.where(
+                CatalogItem.name_he_normalized.ilike(f"%{q_norm}%")
+            ).order_by(CatalogItem.usage_count.desc()).offset(offset).limit(limit)
+            result = await db.execute(fallback_stmt)
+            items = result.scalars().all()
     else:
-        stmt = stmt.order_by(CatalogItem.usage_count.desc())
-
-    stmt = stmt.offset(offset).limit(limit)
-    result = await db.execute(stmt)
-    items = result.scalars().all()
+        result = await db.execute(stmt.order_by(CatalogItem.usage_count.desc()).offset(offset).limit(limit))
+        items = result.scalars().all()
 
     if q:
-        await set_search_cache(q, [CatalogItemOut.model_validate(i).model_dump() for i in items])
+        await set_search_cache(q, [CatalogItemOut.model_validate(i).model_dump(mode="json") for i in items])
 
     count_stmt = select(func.count()).select_from(CatalogItem).where(CatalogItem.deleted_at.is_(None))
-    if q_norm:
-        count_stmt = count_stmt.where(
-            text("similarity(name_he_normalized, :q) > 0.15").bindparams(q=q_norm)
-        )
     if category:
         count_stmt = count_stmt.where(CatalogItem.category_id == category)
-    total = (await db.execute(count_stmt)).scalar_one()
+    if q_norm:
+        trgm_count = count_stmt.where(
+            text("similarity(name_he_normalized, :q) > 0.15").bindparams(q=q_norm)
+        )
+        try:
+            total = (await db.execute(trgm_count)).scalar_one()
+        except Exception:
+            await db.rollback()
+            total = (await db.execute(
+                count_stmt.where(CatalogItem.name_he_normalized.ilike(f"%{q_norm}%"))
+            )).scalar_one()
+    else:
+        total = (await db.execute(count_stmt)).scalar_one()
 
     return CatalogSearchResult(items=items, total=total)
 
