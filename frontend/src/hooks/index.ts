@@ -98,7 +98,7 @@ export function useCreateHousehold() {
   )
 }
 
-// ── Shopping Lists ────────────────────────────────────────────────────────────
+// ── Lists ─────────────────────────────────────────────────────────────────────
 
 export function useLists(householdId?: string) {
   const { setLists, setActiveList, activeListId } = useStore()
@@ -109,6 +109,7 @@ export function useLists(householdId?: string) {
       enabled: !!householdId,
       onSuccess: (data: any[]) => {
         setLists(data)
+        // Auto-select first list if none selected
         if (!activeListId && data.length > 0) {
           setActiveList(data[0].id)
         }
@@ -117,24 +118,6 @@ export function useLists(householdId?: string) {
     }
   )
 }
-
-export function useCreateList() {
-  const qc = useQueryClient()
-  const { activeHouseholdId, showToast } = useStore()
-  return useMutation(
-    (body: { name: string; emoji?: string }) =>
-      api.lists.create({ ...body, household_id: activeHouseholdId! }),
-    {
-      onSuccess: () => {
-        qc.invalidateQueries(QK.lists(activeHouseholdId ?? undefined))
-        showToast('הרשימה נוצרה')
-      },
-      onError: (err: Error) => showToast(err.message),
-    }
-  )
-}
-
-// ── List Items ────────────────────────────────────────────────────────────────
 
 export function useListItems(listId: string) {
   const { setItems } = useStore()
@@ -177,6 +160,21 @@ export function useAddItem(listId: string) {
         qc.invalidateQueries(QK.items(listId))
       },
       onError: (err: Error) => showToast(err.message),
+    }
+  )
+}
+
+export function useUpdateItem(listId: string) {
+  const qc = useQueryClient()
+  const { showToast } = useStore()
+
+  return useMutation(
+    async ({ itemId, ...body }: { itemId: string; quantity?: number; unit?: string; note?: string }) => {
+      return api.lists.updateItem(listId, itemId, body)
+    },
+    {
+      onSuccess: () => qc.invalidateQueries(QK.items(listId)),
+      onError: () => showToast('שגיאה בעדכון הפריט'),
     }
   )
 }
@@ -258,7 +256,7 @@ export function useCreateCatalogItem() {
   const qc = useQueryClient()
   const { showToast } = useStore()
   return useMutation(
-    (body: { name_he: string; category_id: string; default_qty?: number; default_unit?: string }) =>
+    (body: { name_he: string; category_id: string; default_qty?: number; default_unit?: string; name_en?: string; barcode?: string }) =>
       api.catalog.create(body),
     {
       onSuccess: () => {
@@ -266,6 +264,51 @@ export function useCreateCatalogItem() {
         showToast('הפריט נוסף לקטלוג')
       },
       onError: (err: Error) => showToast(err.message),
+    }
+  )
+}
+
+export function useUpdateCatalogItem() {
+  const qc = useQueryClient()
+  const { showToast } = useStore()
+
+  return useMutation(
+    async ({ itemId, ...body }: { itemId: string; name_he?: string; name_en?: string; category_id?: string; default_qty?: number; default_unit?: string; barcode?: string }) => {
+      return api.catalog.update(itemId, body)
+    },
+    {
+      onSuccess: () => {
+        qc.invalidateQueries(QK.catalog(''))
+        showToast('פריט עודכן בהצלחה')
+      },
+      onError: () => showToast('שגיאה בעדכון הפריט'),
+    }
+  )
+}
+
+export function useDeleteCatalogItem() {
+  const qc = useQueryClient()
+  const { showToast } = useStore()
+
+  return useMutation(
+    async (itemId: string) => api.catalog.delete(itemId),
+    {
+      onSuccess: () => {
+        qc.invalidateQueries(QK.catalog(''))
+        showToast('פריט נמחק מהקטלוג')
+      },
+      onError: () => showToast('שגיאה במחיקת הפריט'),
+    }
+  )
+}
+
+export function useUploadCatalogImage() {
+  const qc = useQueryClient()
+  return useMutation(
+    async ({ itemId, file }: { itemId: string; file: File }) =>
+      api.catalog.uploadImage(itemId, file),
+    {
+      onSuccess: () => qc.invalidateQueries(QK.catalog('')),
     }
   )
 }
@@ -329,6 +372,12 @@ export function useListWebSocket(listId: string) {
           // Only update if it came from another user
           if (event.by_user !== user?.id) {
             patchItemStatus(listId, event.item_id, event.status)
+          }
+          break
+
+        case 'item_updated':
+          if (event.by_user !== user?.id) {
+            qc.invalidateQueries(QK.items(listId))
           }
           break
 
