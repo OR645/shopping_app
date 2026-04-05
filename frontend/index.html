@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#2D6A4F" />
+    <meta name="description" content="רשימת קניות משפחתית משותפת" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="קניות ביחד" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <title>קניות ביחד</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body, #root {
+        height: 100%;
+        background: #F7F5F0;
+        font-family: 'Heebo', 'Assistant', -apple-system, sans-serif;
+      }
+      /* Prevent iOS bounce scroll */
+      body { overscroll-behavior: none; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
