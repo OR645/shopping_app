@@ -1,0 +1,106 @@
+# ══════════════════════════════════════════════════════════════
+# SECRETS — never commit these!
+# ══════════════════════════════════════════════════════════════
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ══════════════════════════════════════════════════════════════
+# Python / Backend
+# ══════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# MyPy / type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# Alembic — keep migrations, ignore cache
+backend/alembic/versions/__pycache__/
+
+# ══════════════════════════════════════════════════════════════
+# Node / Frontend
+# ══════════════════════════════════════════════════════════════
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+frontend/dist/
+frontend/.vite/
+dist/
+build/
+
+# Vite / PWA generated files
+frontend/public/sw.js
+frontend/public/workbox-*.js
+frontend/public/sw.js.map
+
+# ══════════════════════════════════════════════════════════════
+# Docker
+# ══════════════════════════════════════════════════════════════
+# Keep docker-compose.yml but ignore override files with secrets
+docker-compose.override.yml
+docker-compose.prod.yml
+
+# ══════════════════════════════════════════════════════════════
+# IDE / Editor
+# ══════════════════════════════════════════════════════════════
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ══════════════════════════════════════════════════════════════
+# Logs
+# ══════════════════════════════════════════════════════════════
+*.log
+logs/
+nginx/logs/
+
+# ══════════════════════════════════════════════════════════════
+# Data volumes (local dev mounts)
+# ══════════════════════════════════════════════════════════════
+postgres_data/
+redis_data/
+minio_data/
+
+# ══════════════════════════════════════════════════════════════
+# Misc
+# ══════════════════════════════════════════════════════════════
+*.bak
+*.tmp
+.cache/
