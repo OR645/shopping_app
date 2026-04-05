@@ -3,7 +3,7 @@
  * Handles:
  *  - JWT auth headers (access token in memory, refresh via httpOnly cookie)
  *  - Offline mutation queue (IndexedDB via idb)
- *  - Automatic token refresh on 401
+ *  - Automatic token refresh on 401 (with concurrent-refresh deduplication)
  */
 
 import { openDB, IDBPDatabase } from 'idb'
@@ -90,16 +90,27 @@ export async function clearMutationFromQueue(id: string) {
 // ── Core fetch wrapper ─────────────────────────────────────────────────────────
 const BASE = '/api'
 
+// FIX: deduplicate concurrent refresh calls — only one in-flight at a time
+let _refreshPromise: Promise<boolean> | null = null
+
 async function refreshAccessToken(): Promise<boolean> {
-  try {
-    const res = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
-    if (!res.ok) return false
-    const data = await res.json()
-    setAccessToken(data.access_token, data.expires_in)
-    return true
-  } catch {
-    return false
-  }
+  if (_refreshPromise) return _refreshPromise
+
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
+      if (!res.ok) return false
+      const data = await res.json()
+      setAccessToken(data.access_token, data.expires_in)
+      return true
+    } catch {
+      return false
+    } finally {
+      _refreshPromise = null
+    }
+  })()
+
+  return _refreshPromise
 }
 
 export async function apiFetch<T>(
@@ -107,7 +118,7 @@ export async function apiFetch<T>(
   options: RequestInit = {},
   retry = true,
 ): Promise<T> {
-  // Auto-refresh token if expired
+  // Auto-refresh token if expired (but only if we had a token to begin with)
   if (isTokenExpired() && accessToken !== null) {
     const ok = await refreshAccessToken()
     if (!ok) {
@@ -121,6 +132,7 @@ export async function apiFetch<T>(
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   }
+
   if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`
   }
@@ -131,10 +143,10 @@ export async function apiFetch<T>(
     credentials: 'include',
   })
 
-  // Handle 401 — attempt one token refresh
+  // Handle 401 — attempt one token refresh, then give up
   if (res.status === 401 && retry) {
     const ok = await refreshAccessToken()
-    if (ok) return apiFetch<T>(path, options, false)
+    if (ok) return apiFetch<T>(path, options, false)  // retry=false prevents infinite loop
     clearAccessToken()
     window.dispatchEvent(new Event('auth:logout'))
     throw new Error('Not authenticated')
@@ -205,115 +217,51 @@ export const api = {
   households: {
     list: () => apiFetch<{ id: string; name: string; emoji: string }[]>('/households'),
     create: (body: { name: string; emoji?: string }) =>
-      apiFetch<{ id: string }>('/households', { method: 'POST', body: JSON.stringify(body) }),
-    members: (id: string) => apiFetch<unknown[]>(`/households/${id}/members`),
+      apiFetch<{ id: string; name: string; emoji: string }>('/households', { method: 'POST', body: JSON.stringify(body) }),
+    members: (id: string) => apiFetch<any[]>(`/households/${id}/members`),
     invite: (id: string, body: { email: string; role?: string }) =>
       apiFetch(`/households/${id}/invite`, { method: 'POST', body: JSON.stringify(body) }),
-  },
-
-  catalog: {
-    categories: () => apiFetch<unknown[]>('/catalog/categories'),
-    search: (q: string, category?: string) =>
-      apiFetch<{ items: unknown[]; total: number }>(`/catalog/items?q=${encodeURIComponent(q)}${category ? `&category=${category}` : ''}`),
-    checkDuplicate: (name: string) =>
-      apiFetch<{ duplicates: unknown[]; can_create: boolean }>(`/catalog/items/check-duplicate?name=${encodeURIComponent(name)}`),
-    create: (body: { name_he: string; category_id: string; default_qty?: number; default_unit?: string }) =>
-      apiFetch<{ id: string }>('/catalog/items', { method: 'POST', body: JSON.stringify(body) }),
-    uploadImage: (itemId: string, file: File) => {
-      const form = new FormData()
-      form.append('file', file)
-      return apiFetch<{ image_url: string }>(`/catalog/items/${itemId}/image`, {
-        method: 'POST',
-        headers: {},  // Let browser set Content-Type for multipart
-        body: form,
-      })
-    },
+    recurring: (id: string) => apiFetch<any[]>(`/households/${id}/recurring`),
+    createRecurring: (id: string, body: any) =>
+      apiFetch(`/households/${id}/recurring`, { method: 'POST', body: JSON.stringify(body) }),
+    updateRecurring: (householdId: string, itemId: string, body: any) =>
+      apiFetch(`/households/${householdId}/recurring/${itemId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    deleteRecurring: (householdId: string, itemId: string) =>
+      apiFetch(`/households/${householdId}/recurring/${itemId}`, { method: 'DELETE' }),
   },
 
   lists: {
-    list: (householdId?: string) =>
-      apiFetch<unknown[]>(`/lists${householdId ? `?household_id=${householdId}` : ''}`),
-    create: (body: { name: string; emoji?: string; household_id: string }) =>
-      apiFetch<{ id: string }>('/lists', { method: 'POST', body: JSON.stringify(body) }),
+    list: (householdId: string) => apiFetch<any[]>(`/lists?household_id=${householdId}`),
+    create: (body: { household_id: string; name: string; emoji?: string }) =>
+      apiFetch<any>('/lists', { method: 'POST', body: JSON.stringify(body) }),
+    invite: (listId: string, body: { email: string; role?: string }) =>
+      apiFetch(`/lists/${listId}/invite`, { method: 'POST', body: JSON.stringify(body) }),
     items: (listId: string, since?: string) =>
-      apiFetch<unknown[]>(`/lists/${listId}/items${since ? `?since=${since}` : ''}`),
-    addItem: (listId: string, body: { catalog_item_id: string; quantity: number; unit: string; note?: string; idempotency_key?: string }) =>
-      apiFetch<{ id: string }>(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify(body) }),
-    toggleStatus: (listId: string, itemId: string, body: { status: string; vector_clock?: Record<string, number>; idempotency_key?: string }) =>
-      apiFetch(`/lists/${listId}/items/${itemId}/status`, { method: 'POST', body: JSON.stringify(body) }),
+      apiFetch<any>(`/lists/${listId}/items${since ? `?since=${since}` : ''}`),
+    addItem: (listId: string, body: any) =>
+      apiFetch<any>(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify(body) }),
+    updateItem: (listId: string, itemId: string, body: any) =>
+      apiFetch<any>(`/lists/${listId}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     deleteItem: (listId: string, itemId: string) =>
       apiFetch(`/lists/${listId}/items/${itemId}`, { method: 'DELETE' }),
-    sync: (listId: string, mutations: unknown[], since?: string) =>
-      apiFetch(`/lists/${listId}/sync${since ? `?since=${since}` : ''}`, {
-        method: 'POST',
-        body: JSON.stringify({ mutations }),
-      }),
-    invite: (listId: string, body: { user_id: string; role?: string }) =>
-      apiFetch(`/lists/${listId}/members`, { method: 'POST', body: JSON.stringify(body) }),
+    toggleItem: (listId: string, itemId: string, body: { purchased: boolean }) =>
+      apiFetch<any>(`/lists/${listId}/items/${itemId}/toggle`, { method: 'POST', body: JSON.stringify(body) }),
   },
 
-  recurring: {
-    list: (householdId: string) => apiFetch<unknown[]>(`/households/${householdId}/recurring`),
-    create: (householdId: string, body: unknown) =>
-      apiFetch(`/households/${householdId}/recurring`, { method: 'POST', body: JSON.stringify(body) }),
-    update: (householdId: string, id: string, body: unknown) =>
-      apiFetch(`/households/${householdId}/recurring/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    delete: (householdId: string, id: string) =>
-      apiFetch(`/households/${householdId}/recurring/${id}`, { method: 'DELETE' }),
+  catalog: {
+    categories: () => apiFetch<any[]>('/catalog/categories'),
+    search: (q: string) => apiFetch<any>(`/catalog/items?q=${encodeURIComponent(q)}`),
+    checkDuplicate: (name: string) => apiFetch<any>(`/catalog/items/check-duplicate?name=${encodeURIComponent(name)}`),
+    create: (body: any) => apiFetch<any>('/catalog/items', { method: 'POST', body: JSON.stringify(body) }),
+    uploadImage: (itemId: string, file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return apiFetch<any>(`/catalog/items/${itemId}/image`, { method: 'POST', body: form, headers: {} })
+    },
   },
 
   push: {
-    getVapidKey: () => apiFetch<{ key: string }>('/push/vapid-public-key'),
-    subscribe: (body: { endpoint: string; p256dh: string; auth: string; device_hint?: string }) =>
-      apiFetch('/push/subscriptions', { method: 'POST', body: JSON.stringify(body) }),
-    unsubscribe: (endpoint: string) =>
-      apiFetch(`/push/subscriptions?endpoint=${encodeURIComponent(endpoint)}`, { method: 'DELETE' }),
+    subscribe: (body: any) => apiFetch('/push/subscribe', { method: 'POST', body: JSON.stringify(body) }),
+    vapidKey: () => apiFetch<{ public_key: string }>('/push/vapid-public-key'),
   },
-}
-
-// ── WebSocket client ───────────────────────────────────────────────────────────
-export function createListWebSocket(
-  listId: string,
-  token: string,
-  onEvent: (event: Record<string, unknown>) => void,
-  cursor?: string,
-): WebSocket {
-  const params = new URLSearchParams({ token, ...(cursor ? { cursor } : {}) })
-  const ws = new WebSocket(`/ws/lists/${listId}?${params}`)
-
-  let pingInterval: ReturnType<typeof setInterval>
-
-  ws.onopen = () => {
-    console.log(`WS connected to list ${listId}`)
-    // Send keepalive pings every 30s
-    pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }))
-      }
-    }, 30_000)
-  }
-
-  ws.onmessage = (e) => {
-    try {
-      const msg = JSON.parse(e.data)
-      if (msg.type === 'pong') return
-      onEvent(msg)
-    } catch {
-      console.error('WS parse error', e.data)
-    }
-  }
-
-  ws.onerror = (e) => console.error('WS error', e)
-
-  ws.onclose = () => {
-    clearInterval(pingInterval)
-    console.log(`WS disconnected from list ${listId}`)
-  }
-
-  return ws
-}
-
-// ── Token accessor (for WebSocket auth in main.tsx) ────────────────────────────
-export function getStoredToken(): string | null {
-  return accessToken
 }
